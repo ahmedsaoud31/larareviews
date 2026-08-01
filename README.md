@@ -20,7 +20,7 @@
 Add the package to your Laravel application `composer.json` or local packages repository:
 
 ```bash
-composer require ahmedsaoud31/larareviews:main-dev
+composer require ahmedsaoud31/larareviews:dev-main
 ```
 
 Publish configuration and run migrations:
