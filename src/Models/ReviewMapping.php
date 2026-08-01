@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ReviewMapping extends Model
 {
-    protected $table = 'review_mappings';
+    protected $table = 'larareviews_review_mappings';
 
     protected $fillable = [
         'reviewable_type',

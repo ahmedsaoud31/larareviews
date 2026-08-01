@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Review extends Model
 {
-    protected $table = 'reviews';
+    protected $table = 'larareviews_reviews';
 
     protected $fillable = [
         'reviewable_type',

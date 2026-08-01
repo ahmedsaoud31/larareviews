@@ -11,7 +11,7 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('review_mappings', function (Blueprint $table) {
+        Schema::create('larareviews_review_mappings', function (Blueprint $table) {
             $table->id();
             
             // Polymorphic relation to local model (e.g. App\Models\Tour, Hotel, etc.)
@@ -47,6 +47,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('review_mappings');
+        Schema::dropIfExists('larareviews_review_mappings');
     }
 };

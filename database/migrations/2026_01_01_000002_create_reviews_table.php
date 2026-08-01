@@ -11,7 +11,7 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('reviews', function (Blueprint $table) {
+        Schema::create('larareviews_reviews', function (Blueprint $table) {
             $table->id();
 
             // Polymorphic link to local entity (e.g. Tour)
@@ -20,7 +20,7 @@ return new class extends Migration
             // Foreign key to optional review_mapping entry
             $table->foreignId('review_mapping_id')
                 ->nullable()
-                ->constrained('review_mappings')
+                ->constrained('larareviews_review_mappings')
                 ->nullOnDelete();
 
             // Platform name
@@ -64,6 +64,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('reviews');
+        Schema::dropIfExists('larareviews_reviews');
     }
 };
