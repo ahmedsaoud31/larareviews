@@ -22,7 +22,7 @@ class Schema extends Component
 
         $avg = method_exists($reviewable, 'getAverageRating') ? $reviewable->getAverageRating() : 0.0;
         $total = method_exists($reviewable, 'getTotalReviewsCount') ? $reviewable->getTotalReviewsCount() : 0;
-        $reviews = method_exists($reviewable, 'reviews') ? $reviewable->reviews()->limit(10)->get() : collect();
+        $reviews = method_exists($reviewable, 'laraReviews') ? $reviewable->laraReviews()->limit(10)->get() : collect();
 
         $schema = [
             '@context' => 'https://schema.org',

@@ -19,8 +19,8 @@ class Grid extends Component
     ) {
         $this->theme = $theme ?? config('larareviews.ui.theme', 'light');
 
-        $query = method_exists($reviewable, 'reviews')
-            ? $reviewable->reviews()
+        $query = method_exists($reviewable, 'laraReviews')
+            ? $reviewable->laraReviews()
             : null;
 
         if ($query && $platform) {

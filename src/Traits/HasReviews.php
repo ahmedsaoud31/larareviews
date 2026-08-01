@@ -13,7 +13,7 @@ trait HasReviews
     /**
      * Get all collected reviews for this model.
      */
-    public function reviews(): MorphMany
+    public function laraReviews(): MorphMany
     {
         return $this->morphMany(Review::class, 'reviewable')->orderByDesc('review_date');
     }
@@ -65,7 +65,7 @@ trait HasReviews
         $mapping = $this->reviewMappings()->where('platform', $platform)->first();
 
         if ($mapping) {
-            $this->reviews()->where('platform', $platform)->delete();
+            $this->laraReviews()->where('platform', $platform)->delete();
             $mapping->delete();
             $this->clearReviewsCache();
             return true;
@@ -95,7 +95,7 @@ trait HasReviews
                 $reviewsData = $driver->fetchReviews($mapping->external_id, $mapping->settings ?? []);
 
                 foreach ($reviewsData as $data) {
-                    $this->reviews()->updateOrCreate(
+                    $this->laraReviews()->updateOrCreate(
                         [
                             'platform' => $data->platform,
                             'external_id' => $data->externalId,
@@ -127,7 +127,7 @@ trait HasReviews
      */
     public function getAverageRating(?string $platform = null): float
     {
-        $query = $this->reviews();
+        $query = $this->laraReviews();
         if ($platform) {
             $query->where('platform', strtolower(trim($platform)));
         }
@@ -142,7 +142,7 @@ trait HasReviews
      */
     public function getTotalReviewsCount(?string $platform = null): int
     {
-        $query = $this->reviews();
+        $query = $this->laraReviews();
         if ($platform) {
             $query->where('platform', strtolower(trim($platform)));
         }
@@ -155,7 +155,7 @@ trait HasReviews
      */
     public function getRatingBreakdown(?string $platform = null): array
     {
-        $query = $this->reviews();
+        $query = $this->laraReviews();
         if ($platform) {
             $query->where('platform', strtolower(trim($platform)));
         }
