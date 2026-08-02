@@ -59,7 +59,7 @@ return [
         'tripadvisor' => [
             'class' => \LaraReviews\Drivers\TripAdvisorDriver::class,
             'api_key' => env('TRIPADVISOR_API_KEY'),
-            'api_base_url' => env('TRIPADVISOR_API_BASE', 'https://api.content.tripadvisor.com/api/v1/location'),
+            'api_base_url' => env('TRIPADVISOR_API_BASE', 'https://terra.tripadvisor.com/api/locations'),
             'lang' => env('TRIPADVISOR_LANG', 'en'),
         ],
 

@@ -41,16 +41,22 @@ class TripAdvisorDriver extends AbstractDriver
 
             $reviews = [];
             foreach ($items as $item) {
+                // Handle different API version formats (Terra vs Content API v1)
+                $title = is_array($item['title'] ?? null) ? ($item['title'][0]['value'] ?? null) : ($item['title'] ?? null);
+                $content = is_array($item['text'] ?? null) ? ($item['text'][0]['value'] ?? null) : ($item['text'] ?? null);
+                $dateStr = $item['published_date'] ?? $item['publish_ts'] ?? null;
+                $avatar = $item['user']['avatar']['small'] ?? $item['user']['avatar_url']['url'] ?? null;
+                
                 $reviews[] = new ReviewData(
                     platform: 'tripadvisor',
                     externalId: (string) ($item['id'] ?? uniqid('ta_')),
                     reviewerName: $item['user']['username'] ?? 'TripAdvisor Traveler',
-                    reviewerAvatar: $item['user']['avatar']['small'] ?? null,
-                    reviewerLocation: $item['user']['user_location']['name'] ?? null,
+                    reviewerAvatar: $avatar,
+                    reviewerLocation: $item['user']['user_location']['name'] ?? $item['user']['geo'] ?? null,
                     rating: (float) ($item['rating'] ?? 5.0),
-                    title: $item['title'] ?? null,
-                    content: $item['text'] ?? null,
-                    reviewDate: isset($item['published_date']) ? new DateTime($item['published_date']) : new DateTime(),
+                    title: $title,
+                    content: $content,
+                    reviewDate: $dateStr ? new DateTime($dateStr) : new DateTime(),
                     language: $item['lang'] ?? $lang,
                     originalUrl: $item['url'] ?? "https://www.tripadvisor.com/ShowUserReviews-g{$externalId}.html",
                     verified: true,
