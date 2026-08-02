@@ -21,6 +21,7 @@ abstract class AbstractDriver implements ReviewDriverInterface
             'headers' => [
                 'User-Agent' => 'LaraReviews-Agent/1.0',
                 'Accept' => 'application/json',
+                'Referer' => config('app.url', 'http://localhost'),
             ],
         ]);
     }
@@ -35,9 +36,13 @@ abstract class AbstractDriver implements ReviewDriverInterface
      */
     protected function logError(string $message, \Throwable $exception = null): void
     {
-        Log::warning("[LaraReviews - {$this->getPlatformName()}] {$message}", [
-            'exception' => $exception?->getMessage(),
-        ]);
+        $context = ['exception' => $exception?->getMessage()];
+        
+        if ($exception instanceof \GuzzleHttp\Exception\ClientException && $exception->hasResponse()) {
+            $context['response_body'] = $exception->getResponse()->getBody()->getContents();
+        }
+
+        Log::warning("[LaraReviews - {$this->getPlatformName()}] {$message}", $context);
     }
 
     /**
