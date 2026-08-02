@@ -4,10 +4,23 @@ namespace LaraReviews\Drivers;
 
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
+use LaraReviews\DTO\ReviewData;
+use DateTime;
 
 class TripAdvisorScraperDriver extends AbstractDriver
 {
-    public function fetchReviews(string $externalId): array
+    public function getPlatformName(): string
+    {
+        return 'tripadvisor_scraper';
+    }
+
+    public function fetchSummary(string $externalId): ?\LaraReviews\DTO\ReviewSummaryData
+    {
+        $reviewsData = $this->fetchReviews($externalId);
+        return $this->calculateSummaryFromReviews($reviewsData);
+    }
+
+    public function fetchReviews(string $externalId, array $options = []): array
     {
         // Try to extract the numeric ID if externalId contains "ta_" or similar
         if (preg_match('/(\d+)/', $externalId, $matches)) {
@@ -28,32 +41,110 @@ class TripAdvisorScraperDriver extends AbstractDriver
         Log::info("[LaraReviews - tripadvisor_scraper] Starting scrape for URL: {$url}");
 
         try {
-            $response = $this->httpClient->get($url, [
-                'headers' => [
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                    'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language' => 'en-US,en;q=0.9',
-                    'Cache-Control' => 'no-cache',
-                    'Pragma' => 'no-cache',
-                    'Sec-Ch-Ua' => '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-                    'Sec-Ch-Ua-Mobile' => '?0',
-                    'Sec-Ch-Ua-Platform' => '"Windows"',
-                    'Sec-Fetch-Dest' => 'document',
-                    'Sec-Fetch-Mode' => 'navigate',
-                    'Sec-Fetch-Site' => 'none',
-                    'Sec-Fetch-User' => '?1',
-                    'Upgrade-Insecure-Requests' => '1',
+            $scraperApiKey = config('larareviews.drivers.tripadvisor_scraper.scraperapi_key') ?? env('SCRAPERAPI_KEY');
+            $zenrowsKey = config('larareviews.drivers.tripadvisor_scraper.zenrows_key') ?? env('ZENROWS_KEY');
+            $brightdataProxy = config('larareviews.drivers.tripadvisor_scraper.brightdata_proxy') ?? env('BRIGHTDATA_PROXY');
+            
+            $strategies = [
+                'direct' => [
+                    'url' => $url,
+                    'options' => [
+                        'headers' => [
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                            'Accept-Language' => 'en-US,en;q=0.9',
+                            'Upgrade-Insecure-Requests' => '1',
+                        ],
+                        'http_errors' => false,
+                    ]
                 ],
-                // Don't throw exceptions on 403 so we can parse the DataDome response
-                'http_errors' => false,
-            ]);
+            ];
+            
+            if ($scraperApiKey) {
+                $strategies['scraperapi'] = [
+                    'url' => 'http://api.scraperapi.com/',
+                    'options' => [
+                        'query' => [
+                            'api_key' => $scraperApiKey,
+                            'url' => $url,
+                            'render' => 'true', // Needed for TA React app
+                            'premium' => 'true', // Optional but helpful for TripAdvisor
+                        ],
+                        'http_errors' => false,
+                        'timeout' => 60, // JS rendering takes time
+                    ]
+                ];
+            }
+            
+            if ($zenrowsKey) {
+                $strategies['zenrows'] = [
+                    'url' => 'https://api.zenrows.com/v1/',
+                    'options' => [
+                        'query' => [
+                            'apikey' => $zenrowsKey,
+                            'url' => $url,
+                            'js_render' => 'true',
+                            'antibot' => 'true',
+                            'premium_proxy' => 'true',
+                        ],
+                        'http_errors' => false,
+                        'timeout' => 60,
+                    ]
+                ];
+            }
+            
+            if ($brightdataProxy) {
+                $strategies['brightdata'] = [
+                    'url' => $url,
+                    'options' => [
+                        'headers' => [
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                            'Accept-Language' => 'en-US,en;q=0.9',
+                            'Upgrade-Insecure-Requests' => '1',
+                        ],
+                        'proxy' => $brightdataProxy,
+                        'verify' => false, // Needed for BrightData SSL interception
+                        'http_errors' => false,
+                        'timeout' => 60,
+                    ]
+                ];
+            }
 
-            $html = $response->getBody()->getContents();
-            $statusCode = $response->getStatusCode();
+            $html = null;
+            $statusCode = 0;
+            $success = false;
 
-            // Very basic fallback if DataDome blocks us (usually 403 or 429)
-            if ($statusCode !== 200 || strpos($html, 'datadome') !== false || strpos($html, 'Cloudflare') !== false) {
-                Log::warning("[LaraReviews - tripadvisor_scraper] Blocked by DataDome/Cloudflare (Status: $statusCode) on URL: {$url}");
+            // Prioritize proxies if available, fallback to direct
+            $strategyOrder = [];
+            if ($scraperApiKey) $strategyOrder[] = 'scraperapi';
+            if ($zenrowsKey) $strategyOrder[] = 'zenrows';
+            if ($brightdataProxy) $strategyOrder[] = 'brightdata';
+            $strategyOrder[] = 'direct';
+
+            foreach ($strategyOrder as $strategyName) {
+                Log::info("[LaraReviews - tripadvisor_scraper] Trying strategy: {$strategyName}");
+                
+                try {
+                    $strategy = $strategies[$strategyName];
+                    $response = $this->httpClient->get($strategy['url'], $strategy['options']);
+                    $html = $response->getBody()->getContents();
+                    $statusCode = $response->getStatusCode();
+                    
+                    if ($statusCode === 200 && stripos($html, 'datadome') === false && stripos($html, 'Cloudflare') === false && stripos($html, 'Access Denied') === false) {
+                        $success = true;
+                        Log::info("[LaraReviews - tripadvisor_scraper] Strategy {$strategyName} succeeded!");
+                        break;
+                    }
+                    
+                    Log::warning("[LaraReviews - tripadvisor_scraper] Strategy {$strategyName} blocked/failed (Status: {$statusCode})");
+                } catch (\Exception $ex) {
+                    Log::warning("[LaraReviews - tripadvisor_scraper] Strategy {$strategyName} exception: " . $ex->getMessage());
+                }
+            }
+
+            if (!$success) {
+                Log::warning("[LaraReviews - tripadvisor_scraper] All scraping strategies blocked/failed on URL: {$url}");
                 return $this->getMockReviews($externalId);
             }
 
@@ -115,15 +206,20 @@ class TripAdvisorScraperDriver extends AbstractDriver
                 continue;
             }
 
-            $reviews[] = [
-                'external_id' => 'ta_scrape_' . md5($author . $content),
-                'author_name' => $author,
-                'author_avatar' => 'https://ui-avatars.com/api/?name=' . urlencode($author),
-                'rating' => $rating,
-                'content' => $content,
-                'url' => null,
-                'created_at' => Carbon::now()->toDateTimeString(),
-            ];
+            $reviews[] = new ReviewData(
+                platform: 'tripadvisor_scraper',
+                externalId: 'ta_scrape_' . md5($author . $content),
+                reviewerName: $author,
+                reviewerAvatar: 'https://ui-avatars.com/api/?name=' . urlencode($author),
+                reviewerLocation: null,
+                rating: (float) $rating,
+                title: null,
+                content: $content,
+                reviewDate: new DateTime(),
+                language: 'en',
+                originalUrl: null,
+                verified: true
+            );
         }
 
         return $reviews;
@@ -132,33 +228,48 @@ class TripAdvisorScraperDriver extends AbstractDriver
     protected function getMockReviews(string $externalId): array
     {
         return [
-            [
-                'external_id' => 'ta_scrape_mock_1',
-                'author_name' => 'Scrape Mock User 1',
-                'author_avatar' => 'https://ui-avatars.com/api/?name=Scrape+Mock+1',
-                'rating' => 5,
-                'content' => 'This is a mocked scraped review because the scraper was blocked by DataDome/Cloudflare, or the DOM selectors are outdated.',
-                'url' => 'https://www.tripadvisor.com',
-                'created_at' => Carbon::now()->subDays(1)->toDateTimeString(),
-            ],
-            [
-                'external_id' => 'ta_scrape_mock_2',
-                'author_name' => 'Scrape Mock User 2',
-                'author_avatar' => 'https://ui-avatars.com/api/?name=Scrape+Mock+2',
-                'rating' => 4,
-                'content' => 'Another mock scraped review. The scraper needs rotating residential proxies to bypass bot protection reliably.',
-                'url' => 'https://www.tripadvisor.com',
-                'created_at' => Carbon::now()->subDays(2)->toDateTimeString(),
-            ],
-            [
-                'external_id' => 'ta_scrape_mock_3',
-                'author_name' => 'Scrape Mock User 3',
-                'author_avatar' => 'https://ui-avatars.com/api/?name=Scrape+Mock+3',
-                'rating' => 5,
-                'content' => 'You can change the driver back to tripadvisor to use the API again.',
-                'url' => 'https://www.tripadvisor.com',
-                'created_at' => Carbon::now()->subDays(3)->toDateTimeString(),
-            ]
+            new ReviewData(
+                platform: 'tripadvisor_scraper',
+                externalId: 'ta_scrape_mock_1',
+                reviewerName: 'Scrape Mock User 1',
+                reviewerAvatar: 'https://ui-avatars.com/api/?name=Scrape+Mock+1',
+                reviewerLocation: null,
+                rating: 5.0,
+                title: null,
+                content: 'This is a mocked scraped review because the scraper was blocked by DataDome/Cloudflare, or the DOM selectors are outdated.',
+                reviewDate: new DateTime('-1 day'),
+                language: 'en',
+                originalUrl: 'https://www.tripadvisor.com',
+                verified: true
+            ),
+            new ReviewData(
+                platform: 'tripadvisor_scraper',
+                externalId: 'ta_scrape_mock_2',
+                reviewerName: 'Scrape Mock User 2',
+                reviewerAvatar: 'https://ui-avatars.com/api/?name=Scrape+Mock+2',
+                reviewerLocation: null,
+                rating: 4.0,
+                title: null,
+                content: 'Another mock scraped review. The scraper needs rotating residential proxies to bypass bot protection reliably.',
+                reviewDate: new DateTime('-2 days'),
+                language: 'en',
+                originalUrl: 'https://www.tripadvisor.com',
+                verified: true
+            ),
+            new ReviewData(
+                platform: 'tripadvisor_scraper',
+                externalId: 'ta_scrape_mock_3',
+                reviewerName: 'Scrape Mock User 3',
+                reviewerAvatar: 'https://ui-avatars.com/api/?name=Scrape+Mock+3',
+                reviewerLocation: null,
+                rating: 5.0,
+                title: null,
+                content: 'You can change the driver back to tripadvisor to use the API again.',
+                reviewDate: new DateTime('-3 days'),
+                language: 'en',
+                originalUrl: 'https://www.tripadvisor.com',
+                verified: true
+            )
         ];
     }
 }

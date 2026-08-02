@@ -65,6 +65,10 @@ return [
 
         'tripadvisor_scraper' => [
             'class' => \LaraReviews\Drivers\TripAdvisorScraperDriver::class,
+            // Fallback array of proxies. It will try ScraperAPI first, then ZenRows, then BrightData.
+            'scraperapi_key' => env('SCRAPERAPI_KEY'),
+            'zenrows_key' => env('ZENROWS_KEY'),
+            'brightdata_proxy' => env('BRIGHTDATA_PROXY'),
         ],
 
         'viator' => [
