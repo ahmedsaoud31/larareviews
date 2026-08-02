@@ -63,6 +63,10 @@ return [
             'lang' => env('TRIPADVISOR_LANG', 'en'),
         ],
 
+        'tripadvisor_scraper' => [
+            'class' => \LaraReviews\Drivers\TripAdvisorScraperDriver::class,
+        ],
+
         'viator' => [
             'class' => \LaraReviews\Drivers\ViatorDriver::class,
             'api_key' => env('VIATOR_API_KEY'),
