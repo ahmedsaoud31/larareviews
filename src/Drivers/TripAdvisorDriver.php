@@ -30,6 +30,9 @@ class TripAdvisorDriver extends AbstractDriver
         try {
             $url = "{$baseUrl}/{$externalId}/reviews";
             $response = $this->httpClient->get($url, [
+                'headers' => [
+                    'X-TripAdvisor-API-Key' => $apiKey,
+                ],
                 'query' => [
                     'key' => $apiKey,
                     'language' => $lang,
