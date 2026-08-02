@@ -30,16 +30,88 @@ class TripAdvisorScraperDriver extends AbstractDriver
         }
 
         // Construct a generic TripAdvisor URL. 
-        // TripAdvisor usually redirects to the correct slug if the location ID is correct.
         if (filter_var($externalId, FILTER_VALIDATE_URL)) {
-            $url = $externalId;
+            $baseUrl = $externalId;
         } else {
-            // Using g1 as a generic geo ID (Tripadvisor often auto-redirects)
-            $url = "https://www.tripadvisor.com/Attraction_Review-g1-d{$numericId}-Reviews-A.html";
+            $baseUrl = "https://www.tripadvisor.com/Attraction_Review-g1-d{$numericId}-Reviews-A.html";
         }
 
-        Log::info("[LaraReviews - tripadvisor_scraper] Starting scrape for URL: {$url}");
+        $allReviews = [];
+        $maxPages = $options['max_pages'] ?? 20; // Default max 20 pages (200 reviews)
+        $stopOnDuplicate = $options['stop_on_duplicate'] ?? true;
+        
+        for ($page = 0; $page < $maxPages; $page++) {
+            $offset = $page * 10;
+            
+            if ($offset === 0) {
+                $url = $baseUrl;
+            } else {
+                $url = str_replace('-Reviews-', "-Reviews-or{$offset}-", $baseUrl);
+                // Fallback if str_replace fails to find '-Reviews-'
+                if ($url === $baseUrl) {
+                    Log::warning("[LaraReviews - tripadvisor_scraper] Could not paginate URL: {$baseUrl}");
+                    break;
+                }
+            }
 
+            Log::info("[LaraReviews - tripadvisor_scraper] Scraping page " . ($page + 1) . " (offset {$offset}) URL: {$url}");
+            
+            $html = $this->fetchPageHtml($url);
+            
+            if (!$html) {
+                Log::warning("[LaraReviews - tripadvisor_scraper] HTML was empty or blocked for offset {$offset}");
+                break;
+            }
+
+            // On the first page, if we used a generic g1 URL, extract the canonical URL for safe pagination
+            if ($page === 0 && strpos($baseUrl, '-g1-') !== false) {
+                if (preg_match('/<link rel="canonical" href="([^"]+)"/i', $html, $canonicalMatches)) {
+                    $baseUrl = $canonicalMatches[1];
+                    Log::info("[LaraReviews - tripadvisor_scraper] Updated baseUrl to canonical: {$baseUrl}");
+                }
+            }
+
+            $pageReviews = $this->parseHtml($html);
+            
+            if (empty($pageReviews)) {
+                Log::info("[LaraReviews - tripadvisor_scraper] No reviews found on page " . ($page + 1) . ". Stopping pagination.");
+                break;
+            }
+
+            $duplicatesOnPage = 0;
+            foreach ($pageReviews as $review) {
+                // If it already exists in the database, count it as a duplicate
+                $exists = \LaraReviews\Models\Review::where('external_id', $review->externalId)->exists();
+                if ($exists) {
+                    $duplicatesOnPage++;
+                } else {
+                    $allReviews[] = $review;
+                }
+            }
+
+            Log::info("[LaraReviews - tripadvisor_scraper] Found " . count($pageReviews) . " reviews on page " . ($page + 1) . " ({$duplicatesOnPage} were duplicates).");
+
+            // If ALL reviews on this page are duplicates, we've likely hit the end of the new reviews.
+            // (Only if stop_on_duplicate is true)
+            if ($stopOnDuplicate && $duplicatesOnPage === count($pageReviews)) {
+                Log::info("[LaraReviews - tripadvisor_scraper] All reviews on page are duplicates. Stopping pagination to save proxy credits.");
+                break;
+            }
+            
+            // If we didn't add all of them, but we want to return everything, wait:
+            // The trait HasReviews handles updateOrCreate anyway, so it's safe to return all non-duplicates.
+            // However, to keep the trait happy with updates to existing reviews (like if rating changed), 
+            // we should probably just return them all.
+            // But the user requested "just add new reviews only", so excluding them from the returned array is fine.
+        }
+        
+        // If we found absolutely nothing across all pages, return empty array
+        // (This prevents mock reviews from overwriting real database data)
+        return $allReviews;
+    }
+
+    protected function fetchPageHtml(string $url): ?string
+    {
         try {
             $scraperApiKey = config('larareviews.drivers.tripadvisor_scraper.scraperapi_key') ?? env('SCRAPERAPI_KEY');
             $zenrowsKey = config('larareviews.drivers.tripadvisor_scraper.zenrows_key') ?? env('ZENROWS_KEY');
@@ -145,15 +217,14 @@ class TripAdvisorScraperDriver extends AbstractDriver
 
             if (!$success) {
                 Log::warning("[LaraReviews - tripadvisor_scraper] All scraping strategies blocked/failed on URL: {$url}");
-                return $this->getMockReviews($externalId);
+                return null;
             }
 
-            return $this->parseHtml($html);
+            return $html;
 
         } catch (\Exception $e) {
             Log::error("[LaraReviews - tripadvisor_scraper] Scraping failed: " . $e->getMessage());
-            // Fallback to mock for development continuity
-            return $this->getMockReviews($externalId);
+            return null;
         }
     }
 
@@ -177,29 +248,54 @@ class TripAdvisorScraperDriver extends AbstractDriver
         }
 
         foreach ($nodes as $node) {
+            // Author
             $author = 'Anonymous';
-            $authorNode = $xpath->query(".//a[contains(@class, 'ui_header_link')] | .//span[contains(@class, 'ui_header_link')] | .//div[contains(@class, 'info_text')]/div", $node)->item(0);
-            if ($authorNode) {
-                $author = trim($authorNode->textContent);
-            }
-
-            $content = '';
-            $contentNode = $xpath->query(".//q/span | .//span[contains(@class, 'partial_entry')] | .//span[@data-automation='reviewText']", $node)->item(0);
-            if ($contentNode) {
-                $content = trim($contentNode->textContent);
-            }
-
-            $rating = 5;
-            $ratingNode = $xpath->query(".//span[contains(@class, 'ui_bubble_rating')] | .//svg[contains(@class, 'Uctuv')]", $node)->item(0);
-            if ($ratingNode) {
-                $class = $ratingNode->getAttribute('class');
-                $aria = $ratingNode->getAttribute('aria-label');
-                if (preg_match('/bubble_(\d)0/', $class, $matches)) {
-                    $rating = (int) $matches[1];
-                } elseif (preg_match('/(\d)(\.\d)? of 5/', $aria, $matches)) {
-                    $rating = (int) $matches[1];
+            $authorNodes = $xpath->query(".//a[contains(@href, '/Profile/')]", $node);
+            foreach ($authorNodes as $an) {
+                if (trim($an->textContent) !== '') {
+                    $author = trim($an->textContent);
+                    break;
                 }
             }
+
+            // Rating
+            $rating = 5;
+            $titleNode = $xpath->query(".//svg/title[contains(text(), 'of 5 bubbles')]", $node)->item(0);
+            if ($titleNode && preg_match('/(\d)(\.\d)? of 5/', $titleNode->textContent, $matches)) {
+                $rating = (float) $matches[1];
+            }
+
+            // Title
+            $title = '';
+            $h3 = $xpath->query(".//h3", $node)->item(0);
+            if ($h3) {
+                $title = trim($h3->textContent);
+            }
+
+            // Content
+            $content = '';
+            $contentContainer = $xpath->query(".//div[.//button[contains(., 'Read more')]]", $node);
+            if ($contentContainer->length > 0) {
+                $textDiv = $xpath->query("./div[1]", $contentContainer->item(0))->item(0);
+                if ($textDiv) $content = trim($textDiv->textContent);
+            }
+            if (empty($content)) {
+                $spans = $xpath->query(".//span", $node);
+                $longest = '';
+                foreach ($spans as $span) {
+                    $text = trim($span->textContent);
+                    if ($text === $title || $text === $author || stripos($text, 'contributions') !== false || stripos($text, 'Written') !== false) {
+                        continue;
+                    }
+                    if (strlen($text) > strlen($longest)) {
+                        $longest = $text;
+                    }
+                }
+                $content = $longest;
+            }
+            // Clean up trailing "Read more" from text extraction
+            $content = preg_replace('/Read more$/i', '', $content);
+            $content = trim($content);
 
             // Skip empty contents to avoid junk
             if (empty($content)) {
@@ -213,7 +309,7 @@ class TripAdvisorScraperDriver extends AbstractDriver
                 reviewerAvatar: 'https://ui-avatars.com/api/?name=' . urlencode($author),
                 reviewerLocation: null,
                 rating: (float) $rating,
-                title: null,
+                title: $title ?: null,
                 content: $content,
                 reviewDate: new DateTime(),
                 language: 'en',

@@ -26,8 +26,9 @@ class LaraReviewsManager extends Manager
      */
     protected function createTripadvisorDriver(): ReviewDriverInterface
     {
-        $config = $this->container['config']['larareviews.drivers.tripadvisor'] ?? [];
-        return new TripAdvisorDriver($config);
+        $config = $this->container['config']['larareviews.drivers.tripadvisor_scraper'] ?? [];
+        // Use the Scraper driver by default for 'tripadvisor' to force scraping during sync
+        return new \LaraReviews\Drivers\TripAdvisorScraperDriver($config);
     }
 
     /**
